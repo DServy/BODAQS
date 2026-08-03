@@ -30,14 +30,17 @@ All configuration lives in the "Configuration" section at the top of `firmware/b
 
 **Default:** `auto`
 
-**Special value:** `auto` (the default) auto-detects a connected ESP32-S3 on each run. The script scans `/dev/cu.*`, probes each port with esptool, and uses the first ESP32-S3 that responds. See the Port Detection section in SKILL.md.
+**Special value:** `auto` (the default) auto-detects a connected ESP32-S3 on each run. The script scans `/dev/cu.*` (macOS), `/dev/ttyACM*` and `/dev/ttyUSB*` (Linux), and probes each port with esptool. Windows users should specify a `COM<N>` port explicitly. See the Port Detection section in SKILL.md.
 
-**When to prompt the user:** When flashing fails with a port error, or when the user mentions a different USB port or device. Common macOS values:
+**When to prompt the user:** When flashing fails with a port error, or when the user mentions a different USB port or device. Common values:
 
-- `/dev/cu.usbmodem1101` — typical ESP32-S3 USB CDC
-- `/dev/cu.usbmodem2101` — second USB CDC device
-- `/dev/cu.SLAB_USBtoUART` — CP210x UART bridge (older boards)
-- `auto` — auto-detect by scanning /dev and probing with esptool
+- `/dev/cu.usbmodem1101` — typical ESP32-S3 USB CDC (macOS)
+- `/dev/cu.usbmodem2101` — second USB CDC device (macOS)
+- `/dev/cu.SLAB_USBtoUART` — CP210x UART bridge, older boards (macOS)
+- `/dev/ttyACM0` — typical ESP32-S3 USB CDC (Linux)
+- `/dev/ttyUSB0` — CP210x UART bridge (Linux)
+- `COM3` — typical Windows port (adjust N as needed)
+- `auto` — auto-detect by scanning serial ports and probing with esptool
 
 To discover available ports: `ls /dev/cu.*` with the device plugged in, or run `./build.sh detect`.
 
@@ -69,9 +72,9 @@ To discover available ports: `ls /dev/cu.*` with the device plugged in, or run `
 
 **What it controls:** Filename of the merged binary written to `firmware/`.
 
-**Default:** `bodaqs-firmware.bin`
+**Default:** `auto` — produces `bodaqs-firmware-<env>.bin` (e.g., `bodaqs-firmware-thingplus_s3_usb_cdcserial_bodaqs_4f.bin`).
 
-**When to change:** When building for multiple boards, set a per-env filename to avoid overwriting. Both environments produce the same `bodaqs-firmware.bin` by default — each build overwrites the previous binary. For multi-board workflows, use distinct names (e.g., `bodaqs-4f.bin` vs `bodaqs-v1rc3.bin`) via `build.conf`.
+**When to change:** Set to a static filename (e.g., `bodaqs-firmware.bin`) in `build.conf` if you want a single fixed name regardless of environment. The `auto` default ensures each board's binary is kept separate, preventing accidental cross-board flashing.
 
 ## Optional build.conf File
 
@@ -81,7 +84,7 @@ If `firmware/build.conf` exists, it is sourced after the inline defaults and can
 # firmware/build.conf
 DEFAULT_ENV="bodaqs_s3_mini_n4r2"
 DEFAULT_PORT="/dev/cu.usbmodem2101"
-OUTPUT_BIN="bodaqs-v1rc3.bin"
+OUTPUT_BIN="bodaqs-v1rc3.bin"   # static filename; use "auto" for per-env naming
 ```
 
 The file is optional — the script works standalone with inline defaults if `build.conf` does not exist.

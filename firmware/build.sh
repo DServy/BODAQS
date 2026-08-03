@@ -9,7 +9,7 @@
 #   ./build.sh flash [env]         Build + merge + flash to device
 #   ./build.sh clean [env]         Clean build directory for an env
 #   ./build.sh check               Verify tools, project, port, and device
-#   ./build.sh detect              Scan /dev for connected ESP32-S3 devices
+#   ./build.sh detect              Scan for connected ESP32-S3 devices
 #   ./build.sh list                List available environments
 #   ./build.sh help                Show this help
 #
@@ -63,7 +63,9 @@ OFFSET_PARTITIONS="0x8000"
 OFFSET_FIRMWARE="0x10000"
 
 # Name of the merged binary written to the firmware/ directory.
-OUTPUT_BIN="bodaqs-firmware.bin"
+# Set to "auto" to include the environment name (e.g., bodaqs-firmware-<env>.bin).
+# Override with a static filename in build.conf if needed.
+OUTPUT_BIN="auto"
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -113,6 +115,26 @@ list_envs() {
   echo "Set DEFAULT_ENV in build.sh (or build.conf) to change the default."
 }
 
+# Detect esptool version and set subcommand names accordingly.
+# esptool < 5.0 uses underscores (chip_id, merge_bin, write_flash)
+# esptool >= 5.0 uses hyphens (chip-id, merge-bin, write-flash)
+# esptool >= 5.0 also accepts underscores for backward compatibility,
+# so we default to underscores if version detection fails.
+resolve_esptool_syntax() {
+  local et_ver_major
+  et_ver_major=$(esptool version 2>&1 | grep -oE 'v?[0-9]+\.' | head -1 | tr -d 'v.')
+
+  if [[ -n "$et_ver_major" && "$et_ver_major" -ge 5 ]]; then
+    ESPTOOL_CHIP_ID="chip-id"
+    ESPTOOL_MERGE_BIN="merge-bin"
+    ESPTOOL_WRITE_FLASH="write-flash"
+  else
+    ESPTOOL_CHIP_ID="chip_id"
+    ESPTOOL_MERGE_BIN="merge_bin"
+    ESPTOOL_WRITE_FLASH="write_flash"
+  fi
+}
+
 check_tools() {
   local missing=0
   if ! command -v pio &>/dev/null; then
@@ -128,9 +150,10 @@ check_tools() {
   if [[ $missing -eq 1 ]]; then
     exit 1
   fi
+  resolve_esptool_syntax
 }
 
-# Scan /dev/cu.* for connected ESP32-S3 devices by probing each candidate port
+# Scan serial ports for connected ESP32-S3 devices by probing each candidate port
 # with esptool. Sets DETECTED_PORT and DETECTED_MAC on success.
 # Filters out Bluetooth, debug, and other non-USB serial ports.
 detect_port() {
@@ -138,15 +161,21 @@ detect_port() {
   local port
 
   # Collect candidate USB serial ports (exclude Bluetooth, debug, etc.)
+  # macOS: /dev/cu.*  |  Linux: /dev/ttyACM*, /dev/ttyUSB*
   while IFS= read -r port; do
     case "$port" in
       /dev/cu.Bluetooth-*|/dev/cu.debug-*) ;;
       *) candidates+=("$port") ;;
     esac
   done < <(ls /dev/cu.* 2>/dev/null || true)
+  while IFS= read -r port; do
+    candidates+=("$port")
+  done < <(ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null || true)
 
   if [[ ${#candidates[@]} -eq 0 ]]; then
-    echo "ERROR: No serial ports found in /dev/cu.*"
+    echo "ERROR: No serial ports found."
+    echo "  Scanned: /dev/cu.* (macOS), /dev/ttyACM* /dev/ttyUSB* (Linux)"
+    echo "  Windows users: use --port COM<N> to specify a port."
     echo "  Connect an ESP32-S3 via USB and try again."
     return 1
   fi
@@ -161,7 +190,7 @@ detect_port() {
   for port in "${candidates[@]}"; do
     # Probe each port — esptool exits non-zero if no ESP32-S3 responds
     local chip_info
-    if chip_info=$(esptool --chip "$CHIP" --port "$port" chip-id 2>&1); then
+    if chip_info=$(esptool --chip "$CHIP" --port "$port" "$ESPTOOL_CHIP_ID" 2>&1); then
       local chip_type chip_mac
       chip_type=$(echo "$chip_info" | grep -i 'Chip type:' | head -1 | sed 's/^Chip type:[[:space:]]*//')
       chip_mac=$(echo "$chip_info" | grep -i '^MAC:' | head -1 | sed 's/^MAC:[[:space:]]*//')
@@ -234,6 +263,16 @@ resolve_flash_baud() {
   esac
 }
 
+# Resolve OUTPUT_BIN: if set to "auto", include the environment name
+# (e.g., bodaqs-firmware-<env>.bin). A static filename is used as-is.
+resolve_output_bin() {
+  if [[ "$OUTPUT_BIN" == "auto" ]]; then
+    RESOLVED_OUTPUT_BIN="bodaqs-firmware-${ENV}.bin"
+  else
+    RESOLVED_OUTPUT_BIN="$OUTPUT_BIN"
+  fi
+}
+
 do_build() {
   echo "=== Building (env: ${ENV}) ==="
   echo ""
@@ -267,15 +306,15 @@ verify_artifacts() {
 do_merge() {
   verify_artifacts
 
-  local output="${SCRIPT_DIR}/${OUTPUT_BIN}"
+  local output="${SCRIPT_DIR}/${RESOLVED_OUTPUT_BIN}"
 
-  echo "=== Merging into ${OUTPUT_BIN} ==="
+  echo "=== Merging into ${RESOLVED_OUTPUT_BIN} ==="
   echo "  bootloader  @ ${OFFSET_BOOTLOADER}  (${ARTIFACT_BOOTLOADER##*/})"
   echo "  partitions  @ ${OFFSET_PARTITIONS}  (${ARTIFACT_PARTITIONS##*/})"
   echo "  firmware    @ ${OFFSET_FIRMWARE}  (${ARTIFACT_FIRMWARE##*/})"
   echo ""
 
-  esptool --chip "$CHIP" merge-bin \
+  esptool --chip "$CHIP" "$ESPTOOL_MERGE_BIN" \
     -o "$output" \
     "$OFFSET_BOOTLOADER" "$ARTIFACT_BOOTLOADER" \
     "$OFFSET_PARTITIONS" "$ARTIFACT_PARTITIONS" \
@@ -288,10 +327,10 @@ do_merge() {
 }
 
 do_flash() {
-  local output="${SCRIPT_DIR}/${OUTPUT_BIN}"
+  local output="${SCRIPT_DIR}/${RESOLVED_OUTPUT_BIN}"
 
   if [[ ! -f "$output" ]]; then
-    echo "ERROR: ${OUTPUT_BIN} not found. Run './build.sh build' first."
+    echo "ERROR: ${RESOLVED_OUTPUT_BIN} not found. Run './build.sh build' first."
     exit 1
   fi
 
@@ -304,14 +343,14 @@ do_flash() {
   resolve_flash_baud
 
   echo "=== Flashing ==="
-  echo "  binary:  ${OUTPUT_BIN}"
+  echo "  binary:  ${RESOLVED_OUTPUT_BIN}"
   echo "  port:    ${PORT}"
   echo "  baud:    ${RESOLVED_BAUD}"
   echo "  offset:  0x0"
   echo ""
 
   esptool --chip "$CHIP" --port "$PORT" --baud "$RESOLVED_BAUD" \
-    write-flash 0x0 "$output"
+    "$ESPTOOL_WRITE_FLASH" 0x0 "$output"
 
   echo ""
   echo "=== Flash complete ==="
@@ -350,6 +389,7 @@ do_check() {
     local et_ver
     et_ver=$(esptool version 2>&1 | head -1)
     ok "esptool: ${et_ver}"
+    resolve_esptool_syntax
   else
     bad "esptool not found — install with: pipx install esptool (or: brew install esptool)"
   fi
@@ -416,13 +456,13 @@ do_check() {
   echo "Serial Port"
   if [[ -n "$PORT" ]]; then
     if [[ "$PORT" == "auto" ]]; then
-      ok "Port set to auto-detect (scans /dev/cu.* at flash time)"
+      ok "Port set to auto-detect (scans /dev/cu.*, /dev/ttyACM*, /dev/ttyUSB* at flash time)"
     elif [[ -e "$PORT" ]]; then
       ok "Port ${PORT} exists"
     else
       bad "Port ${PORT} does not exist"
       echo "     Available ports:"
-      ls /dev/cu.* 2>/dev/null | sed 's/^/       /' || true
+      ls /dev/cu.* /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | sed 's/^/       /' || true
     fi
   else
     wa "No port configured (set DEFAULT_PORT in build.sh or use --port)"
@@ -435,7 +475,7 @@ do_check() {
     wa "Auto-detect mode — run './build.sh detect' to scan for devices"
   elif [[ -n "$PORT" && -e "$PORT" ]]; then
     local chip_info
-    if chip_info=$(esptool --chip "$CHIP" --port "$PORT" chip-id 2>&1); then
+    if chip_info=$(esptool --chip "$CHIP" --port "$PORT" "$ESPTOOL_CHIP_ID" 2>&1); then
       local chip_type chip_mac
       chip_type=$(echo "$chip_info" | grep -i 'Chip type:' | head -1 | sed 's/^Chip type:[[:space:]]*//')
       chip_mac=$(echo "$chip_info" | grep -i '^MAC:' | head -1 | sed 's/^MAC:[[:space:]]*//')
@@ -470,13 +510,13 @@ do_check() {
     wa "No previous build for '${ENV}' — run './build.sh build' first"
   fi
 
-  local output="${SCRIPT_DIR}/${OUTPUT_BIN}"
+  local output="${SCRIPT_DIR}/${RESOLVED_OUTPUT_BIN}"
   if [[ -f "$output" ]]; then
     local size
     size=$(ls -lh "$output" | awk '{print $5}')
-    ok "Merged binary: ${OUTPUT_BIN} (${size})"
+    ok "Merged binary: ${RESOLVED_OUTPUT_BIN} (${size})"
   else
-    wa "No merged binary — run './build.sh build' to create ${OUTPUT_BIN}"
+    wa "No merged binary — run './build.sh build' to create ${RESOLVED_OUTPUT_BIN}"
   fi
   echo ""
 
@@ -536,6 +576,9 @@ if [[ ${#POSITIONAL[@]} -ge 2 ]]; then
   ENV="${POSITIONAL[1]}"
 fi
 
+# Resolve output filename now that ENV is known
+resolve_output_bin
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
@@ -568,10 +611,10 @@ case "$COMMAND" in
         do_merge
         resolve_flash_baud
         echo "Done. Flash with:"
-        echo "  ./build.sh flash"
+        echo "  ./build.sh flash ${ENV}"
         echo ""
         echo "Or manually:"
-        echo "  esptool --chip ${CHIP} --port ${PORT:-<port>} --baud ${RESOLVED_BAUD} write-flash 0x0 ${SCRIPT_DIR}/${OUTPUT_BIN}"
+        echo "  esptool --chip ${CHIP} --port ${PORT:-<port>} --baud ${RESOLVED_BAUD} ${ESPTOOL_WRITE_FLASH} 0x0 ${SCRIPT_DIR}/${RESOLVED_OUTPUT_BIN}"
         ;;
 
       merge)

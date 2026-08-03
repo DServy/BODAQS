@@ -58,11 +58,9 @@ Run `./build.sh list` for the current full list.
 
 ## Multi-Board Workflows
 
-When building for multiple boards (e.g., Prototype F and Prototype 3), both environments produce the same output file (`bodaqs-firmware.bin`). Each build overwrites the previous binary — the filename gives no indication of which board it targets.
+When building for multiple boards (e.g., Prototype F and RC3), each environment produces a distinct output file (`bodaqs-firmware-<env>.bin` by default). This prevents accidentally flashing the wrong board's firmware.
 
-To avoid confusion:
-
-- **Set per-env `OUTPUT_BIN`** in `build.conf` to keep separate binaries (e.g., `bodaqs-4f.bin` vs `bodaqs-v1rc3.bin`).
+- **Output filenames include the env name** — `OUTPUT_BIN="auto"` (the default) produces `bodaqs-firmware-<env>.bin`. Set a static filename in `build.conf` if you need a custom name.
 - **Flash baud differs by board** — V1RC3 flashes at 460800, Thing Plus at 921600. The script auto-selects based on environment. Override with `FLASH_BAUD` in build.conf if needed.
 - **Always specify the env** when flashing: `./build.sh flash bodaqs_s3_mini_n4r2` rather than relying on the default.
 
@@ -78,7 +76,7 @@ The check reports six categories with ✓/✗/! markers:
 
 | Category | What it verifies |
 |---|---|
-| Tools | PlatformIO CLI and esptool installed with versions |
+| Tools | PlatformIO CLI and esptool installed with versions; esptool syntax mode (v4 vs v5) |
 | Project | platformio.ini, src/, boards/, variants/ directories present |
 | Environment | DEFAULT_ENV exists in platformio.ini; build.conf status |
 | Serial Port | Configured port exists in /dev |
@@ -89,7 +87,11 @@ Exits with code 1 if any check fails, 0 if all pass. Warnings (build.conf missin
 
 ## Port Detection
 
-Auto-detection is enabled by default (`DEFAULT_PORT="auto"` in build.sh). The script scans `/dev/cu.*` and probes each port with esptool to find a connected ESP32-S3.
+Auto-detection is enabled by default (`DEFAULT_PORT="auto"` in build.sh). The script scans serial ports and probes each with esptool to find a connected ESP32-S3.
+
+- **macOS:** scans `/dev/cu.*` (filters out Bluetooth and debug ports)
+- **Linux:** scans `/dev/ttyACM*` and `/dev/ttyUSB*`
+- **Windows:** use `--port COM<N>` to specify a port explicitly
 
 **Standalone:** `./build.sh detect` — scans and reports all ESP32-S3 devices found.
 
@@ -99,10 +101,10 @@ Auto-detection is enabled by default (`DEFAULT_PORT="auto"` in build.sh). The sc
 ```
 
 **How it works:**
-1. Lists all `/dev/cu.*` ports (filters out Bluetooth and debug ports)
+1. Lists all candidate serial ports (platform-appropriate patterns)
 2. Probes each with `esptool --chip esp32s3 --port <port> chip-id`
 3. If exactly one ESP32-S3 responds, uses it automatically
-4. If multiple respond, lists them all and uses the first (user can override with `--port`)
+4. If multiple respond, **aborts with an error** — you must specify `--port` to select one
 5. If none respond, reports failure with a hint to check the connection
 
 To disable auto-detection, set `DEFAULT_PORT` to a specific port (e.g. `/dev/cu.usbmodem1101`) in build.sh or build.conf.
