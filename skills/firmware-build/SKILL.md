@@ -40,9 +40,12 @@ When the user asks to change build configuration (default environment, serial po
 ## Workflow
 
 1. **Run a system check.** Execute `./build.sh check` to verify tools, project files, environment, serial port, connected device, and build state. This catches problems before a build or flash attempt.
-2. **Determine the target environment.** If the user doesn't specify, use the default (`DEFAULT_ENV` in build.sh). Run `./build.sh list` to see all options.
-3. **Build + merge.** Run `./build.sh build [env]`. Produces `bodaqs-firmware-<env>.bin` in `firmware/`.
-4. **Flash.** Run `./build.sh flash [env]` (builds + merges + flashes in one step), or `./build.sh flash [env] --no-build` to reflash an existing binary. If no env is specified, the script prompts for confirmation before flashing the default environment — always specify the env to target a specific board.
+2. **Ask the user which board they are targeting.** Do not guess or default — always ask. Present the key environments below and let the user choose. If they're unsure, run `./build.sh list` to show all options and ask which board they're building for:
+   - SparkFun ESP32-S3 Thing Plus (BODAQS 4F / Prototype F) → `thingplus_s3_usb_cdcserial_bodaqs_4f`
+   - BODAQS V1RC3 custom board → `bodaqs_s3_mini_n4r2`
+   - Diagnostic/probe builds → envs ending in `_probe` or `_bringup`
+3. **Build + merge.** Run `./build.sh build <env>` with the env the user chose. Produces `bodaqs-firmware-<env>.bin` in `firmware/`.
+4. **Flash.** Run `./build.sh flash <env>` (builds + merges + flashes in one step), or `./build.sh flash <env> --no-build` to reflash an existing binary. Always pass the env the user chose — never omit it.
 5. **If flashing fails**, run `./build.sh check` to diagnose, then verify the serial port with `--port` and that the device is connected and in bootloader mode.
 
 ## Environments
@@ -62,7 +65,7 @@ When building for multiple boards (e.g., Prototype F and RC3), each environment 
 
 - **Output filenames include the env name** — `OUTPUT_BIN="auto"` (the default) produces `bodaqs-firmware-<env>.bin`. Set a static filename in `build.conf` if you need a custom name.
 - **Flash baud differs by board** — V1RC3 flashes at 460800, Thing Plus at 921600. The script auto-selects based on environment. Override with `FLASH_BAUD` in build.conf if needed.
-- **Always specify the env** when flashing: `./build.sh flash bodaqs_s3_mini_n4r2` rather than relying on the default. If no env is given, the script prints a warning and prompts for confirmation before flashing the default environment.
+- **Always ask the user which board they're targeting** before building or flashing. Never default to `DEFAULT_ENV` — flashing the wrong board's firmware is destructive. If the user is unsure, run `./build.sh list` and ask them to pick.
 
 ## System Check
 
