@@ -84,6 +84,7 @@ fi
 
 # Runtime state (populated by arg parser)
 ENV="${DEFAULT_ENV}"
+ENV_EXPLICIT=0
 PORT="${DEFAULT_PORT}"
 SKIP_BUILD=0
 
@@ -224,8 +225,8 @@ detect_port() {
     return 0
   fi
 
-  # Multiple matches — list them and pick the first
-  echo "WARNING: Multiple ESP32-S3 devices found:"
+  # Multiple matches — abort (flashing is destructive; user must pick)
+  echo "ERROR: Multiple ESP32-S3 devices found:"
   local i=1
   for match in "${matches[@]}"; do
     local p="${match%%|*}"
@@ -234,12 +235,8 @@ detect_port() {
     i=$((i + 1))
   done
   echo ""
-  echo "Using the first device. Use --port to specify a different one."
-  local match="${matches[0]}"
-  DETECTED_PORT="${match%%|*}"
-  DETECTED_MAC="${match##*|}"
-  echo "=== Selected: ${DETECTED_PORT} (MAC: ${DETECTED_MAC}) ==="
-  return 0
+  echo "Specify a port with --port to select a device."
+  return 1
 }
 
 # Resolve PORT: if "auto" or empty, run detect_port and set PORT to the result.
@@ -390,6 +387,7 @@ do_check() {
     et_ver=$(esptool version 2>&1 | head -1)
     ok "esptool: ${et_ver}"
     resolve_esptool_syntax
+    ok "esptool syntax: ${ESPTOOL_CHIP_ID} / ${ESPTOOL_MERGE_BIN} / ${ESPTOOL_WRITE_FLASH}"
   else
     bad "esptool not found — install with: pipx install esptool (or: brew install esptool)"
   fi
@@ -545,6 +543,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --env)
       ENV="$2"
+      ENV_EXPLICIT=1
       shift 2
       ;;
     --no-build)
@@ -574,6 +573,7 @@ if [[ ${#POSITIONAL[@]} -ge 1 ]]; then
 fi
 if [[ ${#POSITIONAL[@]} -ge 2 ]]; then
   ENV="${POSITIONAL[1]}"
+  ENV_EXPLICIT=1
 fi
 
 # Resolve output filename now that ENV is known
@@ -611,7 +611,11 @@ case "$COMMAND" in
         do_merge
         resolve_flash_baud
         echo "Done. Flash with:"
-        echo "  ./build.sh flash ${ENV}"
+        flash_cmd="./build.sh flash ${ENV}"
+        if [[ "$PORT" != "auto" && -n "$PORT" ]]; then
+          flash_cmd+=" --port ${PORT}"
+        fi
+        echo "  ${flash_cmd}"
         echo ""
         echo "Or manually:"
         echo "  esptool --chip ${CHIP} --port ${PORT:-<port>} --baud ${RESOLVED_BAUD} ${ESPTOOL_WRITE_FLASH} 0x0 ${SCRIPT_DIR}/${RESOLVED_OUTPUT_BIN}"
@@ -622,6 +626,19 @@ case "$COMMAND" in
         ;;
 
       flash)
+        # Require explicit env or confirmation to prevent wrong-board flashing
+        if [[ $ENV_EXPLICIT -eq 0 ]]; then
+          echo "WARNING: No environment specified. Using default: ${ENV}"
+          echo "  To target a specific board, specify the env:"
+          echo "    ./build.sh flash bodaqs_s3_mini_n4r2"
+          echo ""
+          read -r -p "Continue with ${ENV}? [y/N] " response
+          if [[ ! "$response" =~ ^[Yy]$ ]]; then
+            echo "Aborted."
+            exit 1
+          fi
+          echo ""
+        fi
         resolve_port
         if [[ $SKIP_BUILD -eq 0 ]]; then
           do_build
